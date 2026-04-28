@@ -85,7 +85,7 @@
     "_comment": "Subject ID pattern (MRN+DOS) and MELD subject folder prefix. nnUNet dataset id and name are also configurable.",
     "subject_id_format": "{mrn}{dos}",
     "meld_subject_prefix": "MELD_H52_3T_FCD_",
-    "nnunet_dataset_id": 501,
+    "nnunet_dataset_id": 3,
     "nnunet_dataset_name": "FCD"
   }
 }
