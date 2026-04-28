@@ -1,0 +1,91 @@
+{
+  "_comment": "Classification rules for selecting T1w + T2w-FLAIR series. Edit thresholds/tokens here without touching python. A series matches a modality if ANY rule block matches. Within a block, ALL conditions must hold. Rules are tried in order; first match wins.",
+
+  "common_gates": {
+    "_comment": "Applied to ALL series before classification. Failing any gate = rejected.",
+    "modality": "MR",
+    "image_type_must_include": ["ORIGINAL", "PRIMARY"],
+    "image_type_must_exclude": ["DERIVED", "SECONDARY", "MPR", "MOSAIC", "MOCO", "DESIGN", "TTEST", "MEAN", "FMRI", "PERFUSION", "ASL", "DIFFUSION", "ADC", "TRACEW", "FA", "EXP"],
+    "voxel_mm_min": 0.8,
+    "voxel_mm_max": 1.2,
+    "min_slices": 120,
+    "protocol_negative_tokens": [
+      "MIP", "SCOUT", "AAHSCOUT", "LOCALIZER", "AAH",
+      "DWI", "ADC", "SWI", "DTI", "PERF", "PWI", "ASL",
+      "MRA", "TOF", "ANGIO", "WILLIS",
+      "POST", "GAD", "CONTRAST",
+      "FMRI", "BOLD", "MOCO", "GLM", "DESIGN",
+      "MEAN", "TMAP", "EVA", "GRE",
+      "PHOENIX", "REPORT", "SUB"
+    ]
+  },
+
+  "T1w": [
+    {
+      "name": "Siemens_MPRAGE_by_sequence_name",
+      "_comment": "Siemens MPRAGE / MP2RAGE: SequenceName has tfl3d. Strongest fingerprint when present.",
+      "sequence_name_regex": "tfl3d|tfl_me3d"
+    },
+    {
+      "name": "MPRAGE_by_timing",
+      "_comment": "Vendor-agnostic MPRAGE signature. Short TE + MPRAGE-style TI + GR/IR scanning.",
+      "te_ms_max": 12,
+      "ti_ms_min": 600,
+      "ti_ms_max": 1300,
+      "scanning_sequence_must_include": ["GR", "IR"]
+    },
+    {
+      "name": "GE_BRAVO_SPGR_by_sequence_name",
+      "_comment": "GE 3D T1w (BRAVO / SPGR). Verify regex against your GE data when you get some.",
+      "sequence_name_regex": "efgre3d|bravo|fspgr"
+    },
+    {
+      "name": "T1_by_protocol_token_fallback",
+      "_comment": "Last-resort match on series description. Only used if no rule above matched ANY series.",
+      "is_fallback": true,
+      "protocol_tokens_any_of": ["MPRAGE", "BRAVO", "SPGR", "FSPGR", "MP2RAGE", "TFL3D"]
+    }
+  ],
+
+  "FLAIR": [
+    {
+      "name": "Siemens_3D_FLAIR_by_sequence_name",
+      "_comment": "Siemens 3D FLAIR uses SPACE inversion recovery. SequenceName contains spcir or spc_ir.",
+      "sequence_name_regex": "spcir|spc_ir|spc.*ir"
+    },
+    {
+      "name": "FLAIR_by_timing",
+      "_comment": "FLAIR has the most distinctive signature: TI ~2400ms only used to null CSF.",
+      "ti_ms_min": 1700,
+      "ti_ms_max": 2900,
+      "te_ms_min": 70,
+      "tr_ms_min": 4500
+    },
+    {
+      "name": "GE_CUBE_FLAIR_by_sequence_name",
+      "_comment": "GE 3D FLAIR (CUBE-FLAIR).",
+      "sequence_name_regex": "cube.*flair|flair.*cube"
+    },
+    {
+      "name": "FLAIR_by_protocol_token_fallback",
+      "_comment": "Last-resort. Only used if no rule above matched ANY series.",
+      "is_fallback": true,
+      "protocol_tokens_any_of": ["FLAIR"]
+    }
+  ],
+
+  "selection": {
+    "_comment": "Tiebreakers when multiple series in the same modality pass classification + gates. Lowest isotropy score (closest to 1mm isotropic) wins; then NORM in ImageType; then higher SeriesNumber.",
+    "prefer_isotropic": true,
+    "prefer_normalized": true,
+    "prefer_higher_series_number": true
+  },
+
+  "output_layout": {
+    "_comment": "Subject ID pattern (MRN+DOS) and MELD subject folder prefix. nnUNet dataset id and name are also configurable.",
+    "subject_id_format": "{mrn}{dos}",
+    "meld_subject_prefix": "MELD_H52_3T_FCD_",
+    "nnunet_dataset_id": 501,
+    "nnunet_dataset_name": "FCD"
+  }
+}
