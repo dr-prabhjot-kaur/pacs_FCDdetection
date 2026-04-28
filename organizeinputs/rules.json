@@ -5,7 +5,7 @@
     "_comment": "Applied to ALL series before classification. Failing any gate = rejected.",
     "modality": "MR",
     "image_type_must_include": ["ORIGINAL", "PRIMARY"],
-    "image_type_must_exclude": ["DERIVED", "SECONDARY", "MPR", "MOSAIC", "MOCO", "DESIGN", "TTEST", "MEAN", "FMRI", "PERFUSION", "ASL", "DIFFUSION", "ADC", "TRACEW", "FA", "EXP"],
+    "image_type_must_exclude": ["DERIVED", "SECONDARY", "MOSAIC", "MOCO", "DESIGN", "TTEST", "MEAN", "FMRI", "PERFUSION", "ASL", "DIFFUSION", "ADC", "TRACEW", "FA", "EXP"],
     "voxel_mm_min": 0.8,
     "voxel_mm_max": 1.2,
     "min_slices": 120,
