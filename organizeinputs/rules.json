@@ -86,6 +86,6 @@
     "subject_id_format": "{mrn}{dos}",
     "meld_subject_prefix": "MELD_H52_3T_FCD_",
     "nnunet_dataset_id": 3,
-    "nnunet_dataset_name": "FCD"
+    "nnunet_dataset_name": "Combined"
   }
 }
