@@ -67,13 +67,62 @@ fi
 export PATH="$CONDA_ENV/bin:$PATH"
 echo "Python: $(which python3) ($(python3 --version 2>&1))"
 
-# --- processing -------------------------------------------------------------
+# --- derive study key (= subject id) from scratch path ---------------------
+#
+# The submitter creates scratch/<study_key>/{input,output}, so the parent of
+# $scratch is named <study_key> = <MRN>_<DOS>_<studyhash>. This is what
+# triage_and_convert.py uses as --subject-id (filenames in nnUNet, folder
+# name in MELD).
+
+study_key="$(basename "$scratch")"
+echo "Study key (= subject id): $study_key"
+
+# --- organize inputs (pick T1w + FLAIR, convert, arrange) -----------------
 
 SCRIPTS_DIR=/lab-share/Rad-Warfield-e2/Groups/Imp-Recons/prabhjot/work/gits/pacs_FCDdetection/scripts
-PROCESSOR="${PROCESSOR:-python3 $SCRIPTS_DIR/process_stub.py}"
 
-echo "Running: $PROCESSOR --in-dir $input_dir --out-dir $output_dir"
-$PROCESSOR --in-dir "$input_dir" --out-dir "$output_dir"
+# Singularity image with dcm2niix on PATH. Override at submit time via env if
+# you build a different image:  DCM2NIIX_SIF=/path/other.sif sbatch ...
+DCM2NIIX_SIF="${DCM2NIIX_SIF:-/lab-share/Rad-Warfield-e2/Groups/Imp-Recons/prabhjot/work/containers/dcm2niix.sif}"
+SINGULARITY_BIN="${SINGULARITY_BIN:-singularity}"
+
+# MELD site label and nnUNet dataset id can also be overridden via env.
+MELD_SITE="${MELD_SITE:-site01}"
+NNUNET_DS_ID="${NNUNET_DS_ID:-501}"
+NNUNET_DS_NAME="${NNUNET_DS_NAME:-FCD}"
+
+if [ ! -f "$DCM2NIIX_SIF" ]; then
+    echo "!! dcm2niix singularity image not found: $DCM2NIIX_SIF"
+    touch "$scratch/.failed"
+    exit 6
+fi
+
+# Make sure singularity is available.
+if ! command -v "$SINGULARITY_BIN" >/dev/null 2>&1; then
+    if command -v module >/dev/null 2>&1; then
+        module load singularity 2>/dev/null || true
+    fi
+fi
+if ! command -v "$SINGULARITY_BIN" >/dev/null 2>&1; then
+    echo "!! singularity not on PATH"
+    touch "$scratch/.failed"
+    exit 7
+fi
+
+echo "Running organizeinputs.py"
+echo "  dcm2niix sif: $DCM2NIIX_SIF"
+echo "  MELD site:    $MELD_SITE"
+echo "  nnUNet:       Dataset${NNUNET_DS_ID}_${NNUNET_DS_NAME}"
+
+python3 "$SCRIPTS_DIR/organizeinputs.py" \
+    --in-dir "$input_dir" \
+    --out-dir "$output_dir" \
+    --subject-id "$study_key" \
+    --dcm2niix-sif "$DCM2NIIX_SIF" \
+    --singularity "$SINGULARITY_BIN" \
+    --site "$MELD_SITE" \
+    --nnunet-dataset-id "$NNUNET_DS_ID" \
+    --nnunet-dataset-name "$NNUNET_DS_NAME"
 rc=$?
 
 echo "Finished: $(date -u +%Y-%m-%dT%H-%M-%SZ), rc=$rc"
@@ -84,6 +133,6 @@ if [ $rc -eq 0 ]; then
     exit 0
 else
     touch "$scratch/.failed"
-    echo "Touched $scratch/.failed"
+    echo "Touched $scratch/.failed (see $output_dir/triage_report.json)"
     exit $rc
 fi
