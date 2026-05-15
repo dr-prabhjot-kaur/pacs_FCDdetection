@@ -1,0 +1,5 @@
+# Ignore ForPACSCopy/pacs_FCDdetection folder
+ForPACSCopy/pacs_FCDdetection/
+
+# Allow storagescp_withMELD to be tracked
+!storagescp_withMELD/
