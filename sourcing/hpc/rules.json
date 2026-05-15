@@ -1,0 +1,41 @@
+{
+  "_comment": "Classification rules — Siemens-only, SequenceName-driven (heudiconv-style). Loose gates (just MR + ORIGINAL+PRIMARY). Best candidate chosen by closeness to 1mm isotropic. No timing checks. No description/protocol token checks.",
+
+  "common_gates": {
+    "_comment": "Applied to ALL series before classification. Failing any gate = rejected. Kept minimal: only ORIGINAL/PRIMARY + Modality. NO voxel band, NO min-slice, NO description tokens — let any name-matched series through. Selection picks the best.",
+    "modality": "MR",
+    "image_type_must_include": ["ORIGINAL", "PRIMARY"],
+    "image_type_must_exclude": ["DERIVED", "SECONDARY", "MPR", "MOSAIC", "MOCO", "DESIGN", "TTEST", "MEAN", "FMRI", "PERFUSION", "ASL", "DIFFUSION", "ADC", "TRACEW", "FA", "EXP"]
+  },
+
+  "T1w": [
+    {
+      "name": "Siemens_T1_tfl3d",
+      "_comment": "Siemens 3D T1 family: 'tfl' followed by '3d' (with optional middle text). Matches *tfl3d1_16ns (MPRAGE), *tfl3d2_16ns (MP2RAGE), *tfl_me3d (multi-echo MPRAGE), *tfl3d1_ns, etc.",
+      "sequence_name_regex": "tfl.*3d"
+    }
+  ],
+
+  "FLAIR": [
+    {
+      "name": "Siemens_FLAIR_spc_or_tir",
+      "_comment": "Siemens FLAIR family: spc (SPACE single-slab volumetric, used in 3D FLAIR) OR tir (TurboInversionRecovery, used in 2D FLAIR). Matches *spcir_278ns, *spc_ir, *spcR_278, *tir2d1_27, etc.",
+      "sequence_name_regex": "spc|tir"
+    }
+  ],
+
+  "selection": {
+    "_comment": "Tiebreakers when multiple series in the same modality match by name. Lowest isotropy score (closest to 1mm isotropic) wins; then NORM in ImageType; then higher SeriesNumber. With this design, a 1mm iso 3D scan will beat a 6mm 2D scan automatically.",
+    "prefer_isotropic": true,
+    "prefer_normalized": true,
+    "prefer_higher_series_number": true
+  },
+
+  "output_layout": {
+    "_comment": "Subject ID pattern (MRN+DOS) and MELD subject folder prefix. nnUNet dataset id and name are also configurable.",
+    "subject_id_format": "{mrn}{dos}",
+    "meld_subject_prefix": "MELD_H52_3T_FCD_",
+    "nnunet_dataset_id": 3,
+    "nnunet_dataset_name": "FCD"
+  }
+}
