@@ -3,11 +3,11 @@
 # sbatch script for DICOM study-level processing on BCH HPC.
 #
 # Stage 1 (this job): organizeinputs.py — triage, dcm2niix, layouts.
-# Stage 2 (dispatched at the end): nnunet/predict.sh — GPU inference.
+# Stage 2 (dispatched at the end): predict_gpu.sbatch — GPU inference (nnUNet + registration).
 #
 # Marker contract:
-#   .organize_done    organizeinputs.py succeeded; nnUNet sbatch was dispatched
-#   .organize_failed  organizeinputs.py failed; no nnUNet runs
+#   .organize_done    organizeinputs.py succeeded; GPU sbatch was dispatched
+#   .organize_failed  organizeinputs.py failed; no GPU runs
 #   .nnunet_done      nnUNet inference succeeded
 #   .nnunet_failed    nnUNet inference failed
 #
@@ -128,23 +128,18 @@ touch "$scratch/.organize_done"
 echo "Touched $scratch/.organize_done"
 
 # --- dispatch GPU sbatch jobs ---------------------------------------------
-# Currently meld_graph only. nnunet is DISABLED until T1/FLAIR registration
-# is added to organizeinputs.py (without it, the trained model fails on
-# unregistered inputs because T1 and FLAIR have different shapes).
-# To re-enable nnunet later: uncomment the block below + restore the
-# nnunet markers in storagescp/submitter.py:_classify_completion().
 
 study_key=$(basename "$scratch")
 
 # Helper: dispatch a downstream GPU sbatch. Args:
 #   $1 = friendly name (for log)
-#   $2 = predict.sh path
+#   $2 = predict sbatch script path
 #   $3 = container .sif path
 #   $4 = additional env to pass through to sbatch (e.g. "FOO=bar,BAZ=qux")
 #   $5 = marker stem to write on dispatch-failure (.X_failed)
 #
 # Behavior:
-#   - If predict.sh or .sif is missing, writes the failure marker locally and
+#   - If script or .sif is missing, writes the failure marker locally and
 #     prints a helpful message. Does NOT abort — process_series.sh exits 0 so
 #     submitter sees .organize_done and pulls back what's there.
 #   - On success, prints the new sbatch jobid for log correlation.
@@ -158,9 +153,9 @@ dispatch_downstream() {
     echo
     echo "------------------------------------------------------------"
     echo "Dispatching $name (GPU sbatch)..."
-    echo "  predict.sh: $script"
-    echo "  sif:        $sif"
-    echo "  job name:   $name-$study_key"
+    echo "  predict sbatch: $script"
+    echo "  sif:            $sif"
+    echo "  job name:       $name-$study_key"
 
     if [ ! -f "$script" ]; then
         echo "!! $script not found"
@@ -198,13 +193,12 @@ dispatch_downstream() {
     return 0
 }
 
-# # nnUNet — DISABLED (T1/FLAIR shape mismatch breaks inference)
-# # To re-enable: uncomment these 4 lines AND restore nnunet markers in submitter.py
-# NNUNET_PREDICT="$REPO_ROOT/nnunet/predict.sh"
-# NNUNET_SIF="${NNUNET_SIF:-$REPO_ROOT/containers/nnunet.sif}"
-# dispatch_downstream "nnunet" "$NNUNET_PREDICT" "$NNUNET_SIF" \
-#     "NNUNET_SIF=$NNUNET_SIF" \
-#     "nnunet"
+# nnUNet with Rigid T1/FLAIR registration (GPU)
+NNUNET_PREDICT="/lab-share/Rad-Warfield-e2/Groups/Imp-Recons/prabhjot/datasets/TrainingdataforNNUNET/ReadyForNNunet/nnUNet_raw/checkruncontainer/predict_container.sh"
+NNUNET_SIF="${NNUNET_SIF:-$REPO_ROOT/containers/nnunet.sif}"
+dispatch_downstream "nnunet" "$NNUNET_PREDICT" "$NNUNET_SIF" \
+    "NNUNET_SIF=$NNUNET_SIF" \
+    "nnunet"
 
 # meld_graph (GPU image)
 MELD_PREDICT="$REPO_ROOT/meld_graph/predict.sh"
