@@ -147,6 +147,15 @@ cp -rp "$site_harmo_dir" "$output_dir/preprocessed_surf_data/MELD_${SITE_CODE}"
 echo "Copied site harmonisation params:"
 ls -lh "$output_dir/preprocessed_surf_data/MELD_${SITE_CODE}/" | sed 's/^/    /'
 
+mkdir -p "$output_dir/../data/"
+cp -rp "/lab-share/Rad-Warfield-e2/Groups/Imp-Recons/prabhjot/work/gits/MELDgraph2026/meld_graph/data"/* "$output_dir/../data"
+
+mkdir -p "$output_dir/../meld_params/"
+cp -rp "/lab-share/Rad-Warfield-e2/Groups/Imp-Recons/prabhjot/work/gits/MELDgraph2026/meld_data/meld_params"/* "$output_dir/../meld_params/"
+
+mkdir -p "$output_dir/../models/"
+cp -rp "/lab-share/Rad-Warfield-e2/Groups/Imp-Recons/prabhjot/work/gits/MELDgraph2026/meld_data/models"/* "$output_dir/../models/"
+
 echo
 echo "Per-study /data tree state:"
 echo "  input/ subjects:              $(ls -1 "$input_dir" 2>/dev/null | wc -l)"
@@ -267,10 +276,12 @@ echo "============================================================"
 # Container-side env vars are passed via APPTAINERENV_* (set above).
 
 "$SINGULARITY_BIN" exec --nv --cleanenv "$SIF" \
-    python "$PRED_SCRIPT" \
+    bash -c "cd /app && python '$PRED_SCRIPT' \
         -ids /data/_subjects_for_predict.txt \
-        -harmo_code "$SITE_CODE" \
-        --fastsurfer
+        -harmo_code '$SITE_CODE' \
+        --fastsurfer"
+rc=$?
+
 rc=$?
 
 echo

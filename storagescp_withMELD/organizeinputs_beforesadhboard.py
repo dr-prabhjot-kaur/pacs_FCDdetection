@@ -57,52 +57,6 @@ def log(msg):
     print(f"[{dt.datetime.utcnow().strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
-# --- FCD dashboard hook -----------------------------------------------------
-# Registers this study with the dashboard by dropping dashboard_meta.json into
-# the working-dir root (sibling of the per-method logs the aggregator reads).
-# Everything here is best-effort: it must NEVER break triage, so the single
-# call site in main() is wrapped in try/except and these helpers swallow errors.
-
-def _dash_write_meta(workdir, job_id, mrn, submitter="", patient_name="",
-                     methods=None):
-    import tempfile
-    import time
-    meta = {
-        "job_id": job_id,
-        "mrn": str(mrn),
-        "submitter": submitter,
-        "patient_name": patient_name,
-        "submitted_at": time.time(),
-        "methods": methods or ["meld_classifier", "meld_graph", "nnunet"],
-    }
-    fd, tmp = tempfile.mkstemp(dir=workdir, prefix=".dmeta_")
-    with os.fdopen(fd, "w") as f:
-        json.dump(meta, f, indent=2)
-    os.replace(tmp, os.path.join(workdir, "dashboard_meta.json"))
-
-
-def _dash_probe_dicom(in_dir):
-    """Best-effort (patient_name, submitter) from any series header. Never raises."""
-    name, submitter = "", ""
-    try:
-        for sd in sorted(Path(in_dir).iterdir()):
-            if not sd.is_dir():
-                continue
-            rep = _middle_file(sd)
-            if rep is None:
-                continue
-            ds = pydicom.dcmread(
-                str(rep), stop_before_pixels=True,
-                specific_tags=["PatientName", "StationName", "InstitutionName"])
-            name = str(getattr(ds, "PatientName", "") or "")
-            submitter = str(getattr(ds, "StationName", "")
-                            or getattr(ds, "InstitutionName", "") or "")
-            break
-    except Exception:
-        pass
-    return name, submitter
-
-
 # --- DICOM tag reading ------------------------------------------------------
 
 def _middle_file(series_dir):
@@ -519,24 +473,6 @@ def main():
     if not in_dir.exists():
         log(f"!! in-dir does not exist: {in_dir}")
         return 2
-
-    # --- FCD dashboard: register this job ASAP so it shows up while running.
-    # Meta goes in the working-dir root (sibling of the method logs the
-    # aggregator reads); out_dir is <workdir>/output, so root is out_dir.parent.
-    # Fail-safe: any error here is logged and ignored, never blocks triage.
-    try:
-        workdir_root = out_dir.parent if out_dir.name == "output" else out_dir
-        pat_name, submitter = _dash_probe_dicom(in_dir)
-        _dash_write_meta(
-            str(workdir_root),
-            job_id=args.subject_id,
-            mrn=args.subject_id.split("_")[0],
-            patient_name=pat_name,
-            submitter=submitter,
-            methods=["meld_classifier", "meld_graph", "nnunet"],
-        )
-    except Exception as e:
-        log(f"[dashboard] meta skipped: {e}")
 
     series_dirs = sorted(p for p in in_dir.iterdir() if p.is_dir())
     log(f"Triage: {len(series_dirs)} series in {in_dir}")
