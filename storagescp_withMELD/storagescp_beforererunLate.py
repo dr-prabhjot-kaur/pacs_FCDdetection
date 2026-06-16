@@ -48,15 +48,6 @@ from pynetdicom import (
 )
 
 
-# --- config (set from CLI in main) ------------------------------------------
-
-# A re-send of the SAME StudyInstanceUID is treated as a deliberate re-run
-# (new generation, MRN suffixed -2/-3/...) only if it arrives at least this
-# many hours after the NEWEST existing generation's first arrival. Re-sends
-# within the window are treated as late arrivals of the in-flight study.
-RERUN_AFTER_HOURS = 8.0
-
-
 # --- helpers ----------------------------------------------------------------
 
 def ts():
@@ -80,64 +71,6 @@ def study_uid_hash(study_uid):
 def study_key(mrn, dos, study_uid):
     """The flat identifier used in queue marker filenames."""
     return f"{mrn}_{dos}_{study_uid_hash(study_uid)}"
-
-
-def _parse_ts(text):
-    try:
-        return dt.datetime.strptime(text.strip(), "%Y-%m-%dT%H-%M-%SZ")
-    except Exception:
-        return None
-
-
-def _resolve_effective_mrn(mrn, dos, study_uid, dirs):
-    """Map an arriving series to the (possibly suffixed) MRN it belongs to.
-
-    Generations of one StudyInstanceUID are tracked by durable markers
-    queue/<effmrn>_<dos>_<hash>.first_arrival (one per generation, written when
-    that generation's first series lands; survives promotion/archival).
-
-    Policy:
-      - No prior generation            -> use MRN as-is (generation 1).
-      - Newest generation < window old -> route to that generation (merge or,
-                                          if it already promoted, late-arrival
-                                          quarantine via the caller's checks).
-      - Newest generation >= window old-> new generation: MRN -> MRN-<n+1>.
-
-    "window" = RERUN_AFTER_HOURS, measured from the newest generation's first
-    arrival (NOT generation 1's), so a single re-send burst can't runaway into
-    -2/-3/-4 from stray late series.
-
-    Returns the effective MRN string to use for study_key/paths/markers.
-    """
-    base_hash = study_uid_hash(study_uid)
-    tail = f"_{dos}_{base_hash}.first_arrival"
-    newest_suffix = 0          # 0 => no generation recorded yet
-    newest_first = None
-    for f in dirs["queue"].glob(f"*{tail}"):
-        eff = f.name[:-len(tail)]
-        if eff == mrn:
-            suf = 1
-        elif eff.startswith(mrn + "-") and eff[len(mrn) + 1:].isdigit():
-            suf = int(eff[len(mrn) + 1:])
-        else:
-            continue
-        if suf > newest_suffix:
-            newest_suffix = suf
-            newest_first = _parse_ts(f.read_text()) if f.exists() else None
-
-    if newest_suffix == 0:
-        return mrn  # brand-new study (generation 1)
-
-    if newest_first is not None:
-        age_h = (dt.datetime.utcnow() - newest_first).total_seconds() / 3600.0
-        if age_h >= RERUN_AFTER_HOURS:
-            nxt = newest_suffix + 1
-            log(f"  Re-run: {mrn} study seen {age_h:.1f}h ago "
-                f"(>= {RERUN_AFTER_HOURS}h) -> new generation {mrn}-{nxt}")
-            return f"{mrn}-{nxt}"
-
-    # Within window (or unreadable ts): stay on the current generation.
-    return mrn if newest_suffix == 1 else f"{mrn}-{newest_suffix}"
 
 
 def read_study_keys(series_dir):
@@ -225,19 +158,15 @@ def _handoff_one_series(series_uid, dirs):
         _quarantine(series_uid, src, dirs, "no_mrn_dos_or_studyuid")
         return False
 
-    # Resolve which generation (effective MRN) this arrival belongs to. A
-    # re-send of the same StudyInstanceUID >= RERUN_AFTER_HOURS after the
-    # newest generation's first arrival starts a fresh suffixed generation.
-    eff_mrn = _resolve_effective_mrn(mrn, dos, study_uid, dirs)
-    skey = study_key(eff_mrn, dos, study_uid)
+    skey = study_key(mrn, dos, study_uid)
 
-    # Already past pending for THIS generation? Late arrival.
-    if _staging_path(eff_mrn, dos, study_uid, dirs).exists() or _study_already_in_flight(skey, dirs):
-        log(f"  Late arrival for {eff_mrn}/{dos}/{safe_id(study_uid)[:16]}...")
+    # Already past pending? Late arrival.
+    if _staging_path(mrn, dos, study_uid, dirs).exists() or _study_already_in_flight(skey, dirs):
+        log(f"  Late arrival for {mrn}/{dos}/{safe_id(study_uid)[:16]}...")
         _quarantine(series_uid, src, dirs, f"late_{skey}")
         return False
 
-    pending_study = _pending_path(eff_mrn, dos, study_uid, dirs)
+    pending_study = _pending_path(mrn, dos, study_uid, dirs)
     is_new_study = not pending_study.exists()
     pending_study.mkdir(parents=True, exist_ok=True)
 
@@ -252,20 +181,15 @@ def _handoff_one_series(series_uid, dirs):
             src.rmdir()
         except OSError:
             pass
-        log(f"  Merged {series_uid} into {eff_mrn}/{dos}/{safe_id(study_uid)[:16]}...")
+        log(f"  Merged {series_uid} into {mrn}/{dos}/{safe_id(study_uid)[:16]}...")
     else:
         shutil.move(str(src), str(target))
-        log(f"  Staged {series_uid} -> study_pending/{eff_mrn}/{dos}/{safe_id(study_uid)[:16]}.../")
+        log(f"  Staged {series_uid} -> study_pending/{mrn}/{dos}/{safe_id(study_uid)[:16]}.../")
 
     if is_new_study:
         (pending_study / ".first_arrival").write_text(ts() + "\n")
         (pending_study / ".study_uid").write_text(study_uid + "\n")
-        # Durable per-generation first-arrival marker. Lives in queue/ so it
-        # survives the study dir being promoted/archived, and is what
-        # _resolve_effective_mrn reads on later re-sends. Inert to the
-        # submitter (it globs *.ready/*.submitted) and to _study_already_in_flight.
-        (dirs["queue"] / f"{skey}.first_arrival").write_text(ts() + "\n")
-        log(f"  New study: {eff_mrn}/{dos} (study_uid={study_uid[:32]}..., key={skey})")
+        log(f"  New study: {mrn}/{dos} (study_uid={study_uid[:32]}..., key={skey})")
     return True
 
 
@@ -416,11 +340,6 @@ def main():
     parser.add_argument("--failed-dir", required=True)
     parser.add_argument("--timeout-minutes", type=float, default=20.0)
     parser.add_argument("--watcher-poll-seconds", type=float, default=60.0)
-    parser.add_argument("--rerun-after-hours", type=float, default=8.0,
-                        help="Re-send of same StudyInstanceUID is treated as a "
-                             "new suffixed re-run (MRN-2, MRN-3, ...) only if it "
-                             "arrives at least this many hours after the newest "
-                             "generation's first arrival. Default 8.")
     parser.add_argument("--host", default="10.72.81.37") #)"127.0.0.1")
     parser.add_argument("--port", type=int, default=11112)
     parser.add_argument("--ae-title", default="EPILEPSYML")#ANY-SCP")
@@ -428,9 +347,6 @@ def main():
     args = parser.parse_args()
 
     os.umask(0o002)
-
-    global RERUN_AFTER_HOURS
-    RERUN_AFTER_HOURS = args.rerun_after_hours
 
     dirs = {
         "in":             Path(args.incoming_dir).resolve(),
@@ -478,7 +394,6 @@ def main():
     log(f"  queue:          {dirs['queue']}")
     log(f"  quarantine:     {dirs['quarantine']}")
     log(f"  timeout:        {args.timeout_minutes} min absolute")
-    log(f"  rerun-after:    {RERUN_AFTER_HOURS} h (same StudyUID -> MRN-2/-3/...)")
 
     try:
         ae.start_server((args.host, args.port), evt_handlers=handlers)
