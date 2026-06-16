@@ -51,11 +51,9 @@ from pynetdicom import (
 # --- config (set from CLI in main) ------------------------------------------
 
 # A re-send of the SAME StudyInstanceUID is treated as a deliberate re-run
-# (new generation, MRN suffixed -2/-3/...) only if the study's last run
-# FINISHED at least this many hours ago, judged from the newest terminal
-# queue marker (.done_/.failed_/.submit-failed_). Re-sends while a generation
-# is still active, or within the window of its last finish, are treated as
-# late arrivals of that generation.
+# (new generation, MRN suffixed -2/-3/...) only if it arrives at least this
+# many hours after the NEWEST existing generation's first arrival. Re-sends
+# within the window are treated as late arrivals of the in-flight study.
 RERUN_AFTER_HOURS = 8.0
 
 
@@ -91,103 +89,55 @@ def _parse_ts(text):
         return None
 
 
-# Queue marker classes for a generation's skey:
-#   active (still being assembled / processed):
-#     <skey>.ready / .submitting / .submitted   (no embedded timestamp)
-#     plus a study_pending/ or staging/ dir on disk
-#   terminal (finished a prior run):
-#     <skey>.done_<ts> / .failed_<ts> / .submit-failed_<ts>
-_TERMINAL_PREFIXES = (".done_", ".failed_", ".submit-failed_")
-_ACTIVE_SUFFIXES = (".ready", ".submitting", ".submitted")
-
-
-def _generation_state(eff_mrn, dos, study_uid, dirs):
-    """Inspect one generation (by effective MRN). Returns:
-        (exists, active, terminal_ts)
-      exists      - any trace of this generation (queue marker or on-disk dir)
-      active      - currently assembling/in-flight (do NOT rerun; it's live)
-      terminal_ts - newest .done_/.failed_/.submit-failed_ timestamp, or None
-    """
-    skey = study_key(eff_mrn, dos, study_uid)
-    q = dirs["queue"]
-
-    active = (
-        _pending_path(eff_mrn, dos, study_uid, dirs).exists()
-        or _staging_path(eff_mrn, dos, study_uid, dirs).exists()
-        or any((q / f"{skey}{suf}").exists() for suf in _ACTIVE_SUFFIXES)
-    )
-
-    terminal_ts = None
-    have_terminal = False
-    for pre in _TERMINAL_PREFIXES:
-        for f in q.glob(f"{skey}{pre}*"):
-            have_terminal = True
-            ts_str = f.name[len(skey) + len(pre):]
-            t = _parse_ts(ts_str)
-            if t is not None and (terminal_ts is None or t > terminal_ts):
-                terminal_ts = t
-
-    exists = active or have_terminal
-    return exists, active, terminal_ts
-
-
 def _resolve_effective_mrn(mrn, dos, study_uid, dirs):
     """Map an arriving series to the (possibly suffixed) MRN it belongs to.
 
-    Re-run decision is driven entirely by what is already FLAGGED IN THE QUEUE
-    for this StudyInstanceUID lineage (no separate first_arrival bookkeeping, so
-    studies that completed before this feature existed are handled too):
+    Generations of one StudyInstanceUID are tracked by durable markers
+    queue/<effmrn>_<dos>_<hash>.first_arrival (one per generation, written when
+    that generation's first series lands; survives promotion/archival).
 
-      - No trace of the study at all          -> MRN as-is (generation 1).
-      - Highest generation is still ACTIVE     -> route to it (the caller's
-        (pending/staging/.ready/.submitting/    late-arrival logic merges it or
-         .submitted)                            quarantines it). No rerun.
-      - Highest generation is TERMINAL and its
-        newest done/failed marker is older than
-        RERUN_AFTER_HOURS                       -> new generation: MRN -> MRN-<n+1>.
-      - Highest generation is TERMINAL but the
-        marker is younger than the window       -> route to it -> quarantined late.
+    Policy:
+      - No prior generation            -> use MRN as-is (generation 1).
+      - Newest generation < window old -> route to that generation (merge or,
+                                          if it already promoted, late-arrival
+                                          quarantine via the caller's checks).
+      - Newest generation >= window old-> new generation: MRN -> MRN-<n+1>.
 
-    Age is measured from the newest generation's terminal marker (i.e. when its
-    last run FINISHED), so a single re-send burst can't runaway into -2/-3/-4
-    from stray late series: once the burst's generation is active or freshly
-    terminal, further series route to it rather than spawning another.
+    "window" = RERUN_AFTER_HOURS, measured from the newest generation's first
+    arrival (NOT generation 1's), so a single re-send burst can't runaway into
+    -2/-3/-4 from stray late series.
 
     Returns the effective MRN string to use for study_key/paths/markers.
     """
-    # Walk contiguous generations upward to find the highest existing one.
-    highest = 0
-    h_eff = mrn
-    h_active = False
-    h_terminal_ts = None
-    g = 1
-    while g < 1000:
-        eff = mrn if g == 1 else f"{mrn}-{g}"
-        exists, active, terminal_ts = _generation_state(eff, dos, study_uid, dirs)
-        if not exists:
-            break
-        highest, h_eff, h_active, h_terminal_ts = g, eff, active, terminal_ts
-        g += 1
+    base_hash = study_uid_hash(study_uid)
+    tail = f"_{dos}_{base_hash}.first_arrival"
+    newest_suffix = 0          # 0 => no generation recorded yet
+    newest_first = None
+    for f in dirs["queue"].glob(f"*{tail}"):
+        eff = f.name[:-len(tail)]
+        if eff == mrn:
+            suf = 1
+        elif eff.startswith(mrn + "-") and eff[len(mrn) + 1:].isdigit():
+            suf = int(eff[len(mrn) + 1:])
+        else:
+            continue
+        if suf > newest_suffix:
+            newest_suffix = suf
+            newest_first = _parse_ts(f.read_text()) if f.exists() else None
 
-    if highest == 0:
+    if newest_suffix == 0:
         return mrn  # brand-new study (generation 1)
 
-    if h_active:
-        return h_eff  # generation live -> late arrival / merge downstream
-
-    if h_terminal_ts is not None:
-        age_h = (dt.datetime.utcnow() - h_terminal_ts).total_seconds() / 3600.0
+    if newest_first is not None:
+        age_h = (dt.datetime.utcnow() - newest_first).total_seconds() / 3600.0
         if age_h >= RERUN_AFTER_HOURS:
-            nxt = highest + 1
-            log(f"  Re-run: {mrn} last finished {age_h:.1f}h ago "
+            nxt = newest_suffix + 1
+            log(f"  Re-run: {mrn} study seen {age_h:.1f}h ago "
                 f"(>= {RERUN_AFTER_HOURS}h) -> new generation {mrn}-{nxt}")
             return f"{mrn}-{nxt}"
-        log(f"  {mrn} finished only {age_h:.1f}h ago "
-            f"(< {RERUN_AFTER_HOURS}h); treating re-send as late arrival")
-        return h_eff  # too soon -> route to it -> quarantine late
 
-    # Exists but neither active nor parseable-terminal: route to it (safe).
-    return h_eff
+    # Within window (or unreadable ts): stay on the current generation.
+    return mrn if newest_suffix == 1 else f"{mrn}-{newest_suffix}"
 
 
 def read_study_keys(series_dir):
@@ -310,6 +260,11 @@ def _handoff_one_series(series_uid, dirs):
     if is_new_study:
         (pending_study / ".first_arrival").write_text(ts() + "\n")
         (pending_study / ".study_uid").write_text(study_uid + "\n")
+        # Durable per-generation first-arrival marker. Lives in queue/ so it
+        # survives the study dir being promoted/archived, and is what
+        # _resolve_effective_mrn reads on later re-sends. Inert to the
+        # submitter (it globs *.ready/*.submitted) and to _study_already_in_flight.
+        (dirs["queue"] / f"{skey}.first_arrival").write_text(ts() + "\n")
         log(f"  New study: {eff_mrn}/{dos} (study_uid={study_uid[:32]}..., key={skey})")
     return True
 
