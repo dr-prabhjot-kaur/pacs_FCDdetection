@@ -460,12 +460,11 @@ def _classify_completion(ws_scratch, submitted_marker, timeout_hours):
       .meld_graph_done  / .meld_graph_failed   (GPU meld_graph stage)
       .done             / .failed              (legacy single-stage)
 
-    NOTE: nnunet and meld_classifier are ENABLED. meld_graph, nnunet, AND
-    meld_classifier must each settle (each writes its own .<method>_done /
-    .<method>_failed) before we pull a study back, so we never move scratch
-    out from under a still-running GPU job. nnunet and meld_classifier are
-    treated as best-effort: a .nnunet_failed or .meld_classifier_failed does
-    not downgrade an otherwise-successful (meld_graph_done) study.
+    NOTE: nnunet is ENABLED. Both meld_graph and nnunet must settle (each
+    writes .nnunet_done/.nnunet_failed or .meld_graph_done/.meld_graph_failed)
+    before we pull a study back, so we never move scratch out from under a
+    running nnunet job. nnunet is treated as best-effort: a .nnunet_failed
+    does not downgrade an otherwise-successful (meld_graph_done) study.
 
     timeout_hours: how long after .submitted's mtime we give up waiting
     for missing markers."""
@@ -475,8 +474,6 @@ def _classify_completion(ws_scratch, submitted_marker, timeout_hours):
     p_nn_failed   = (ws_scratch / ".nnunet_failed").exists()
     p_md_done     = (ws_scratch / ".meld_graph_done").exists()
     p_md_failed   = (ws_scratch / ".meld_graph_failed").exists()
-    p_mc_done     = (ws_scratch / ".meld_classifier_done").exists()
-    p_mc_failed   = (ws_scratch / ".meld_classifier_failed").exists()
     p_legacy_done   = (ws_scratch / ".done").exists()
     p_legacy_failed = (ws_scratch / ".failed").exists()
 
@@ -491,22 +488,19 @@ def _classify_completion(ws_scratch, submitted_marker, timeout_hours):
         return ('failed', 'organize_failed')
 
     # Downstream GPU stages "settled" status (each: done or failed).
-    # meld_graph, nnunet AND meld_classifier must all settle before we pull
-    # back, otherwise the scratch dir gets moved out from under a still-running
-    # GPU job (the register_and_predict.py "No such file" failure mode).
+    # BOTH meld_graph AND nnunet must settle before we pull back, otherwise
+    # the scratch dir gets moved out from under a still-running nnunet job
+    # (the register_and_predict.py "No such file" failure mode).
     md_settled = p_md_done or p_md_failed
     nn_settled = p_nn_done or p_nn_failed
-    mc_settled = p_mc_done or p_mc_failed
 
-    if p_org_done and md_settled and nn_settled and mc_settled:
+    if p_org_done and md_settled and nn_settled:
         if p_md_done:
-            # meld_graph is the primary detector; nnunet and meld_classifier are
-            # best-effort, so a failure in either does NOT downgrade the case.
+            # meld_graph is the primary detector; nnunet is best-effort, so a
+            # failed nnunet does NOT downgrade the case to partial.
             why = 'organize_done + meld_graph_done'
             if p_nn_failed:
                 why += ' (nnunet_failed, non-fatal)'
-            if p_mc_failed:
-                why += ' (meld_classifier_failed, non-fatal)'
             return ('success', why)
         # meld_graph failed; organize outputs (NIfTIs) are still useful
         return ('partial', 'organize_done; meld_graph_failed')
@@ -531,8 +525,6 @@ def _classify_completion(ws_scratch, submitted_marker, timeout_hours):
             missing.append("no .meld_graph_*")
         if p_org_done and not nn_settled:
             missing.append("no .nnunet_*")
-        if p_org_done and not mc_settled:
-            missing.append("no .meld_classifier_*")
         return ('timeout', f"stuck {age_h:.1f}h: {', '.join(missing)}")
 
     return None  # keep waiting
