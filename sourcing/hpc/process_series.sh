@@ -194,7 +194,10 @@ dispatch_downstream() {
 }
 
 # nnUNet with Rigid T1/FLAIR registration (GPU)
-NNUNET_PREDICT="/lab-share/Rad-Warfield-e2/Groups/Imp-Recons/prabhjot/datasets/TrainingdataforNNUNET/ReadyForNNunet/nnUNet_raw/checkruncontainer/predict_container.sh"
+# Originally copied from here- 
+# NNUNET_PREDICT="/lab-share/Rad-Warfield-e2/Groups/Imp-Recons/prabhjot/datasets/TrainingdataforNNUNET/ReadyForNNunet/nnUNet_raw/checkruncontainer/predict_container.sh"
+NNUNET_PREDICT="/lab-share/Rad-Warfield-e2/Groups/Imp-Recons/prabhjot/work/gits/pacs_FCDdetection/nnunet/checkruncontainer/predict_container.sh"
+
 NNUNET_SIF="${NNUNET_SIF:-$REPO_ROOT/containers/nnunet.sif}"
 dispatch_downstream "nnunet" "$NNUNET_PREDICT" "$NNUNET_SIF" \
     "NNUNET_SIF=$NNUNET_SIF" \
